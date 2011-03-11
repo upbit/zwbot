@@ -1,0 +1,20 @@
+Twitter中文自动单词机器人框架，可以在GAE上架设自己的单词bot
+词库欠缺中，欢迎提供不同难度、不同类型的词库文本（有任何问题请email或者Twitter发私信@zwbot）
+
+* If you have any problem with deployment, please feel free to email me: `rmusique@gmail.com`
+
+
+** 更新公告 **
+zwbot目前更新到r16，修复了r14中读取词库时的一个BUG。新增稳定的自动回Fo功能，建议同步代码到此版本。
+新增config.py，请参照新的部署指南来配置和个性化您的bot
+
+
+** 目前支持的特性 **
+OAuth认证(使用tweepy框架)
+单词复习。每小时的00/15/30分钟时，推送一个单词。第45分钟时复习之前推送的3个单词
+夜间休息。每天 7:00 ~ 23:59 分为工作时间，夜间自动暂停推送单词
+2010-10-26 xls数据文件支持
+2010-11-10 新增提及页(API:status/mentions)的查看接口
+2010-12-06 更新到 r14 版本。增加config.py，新增自动回Fo功能
+
+Demo: http://twitter.com/zwbot
