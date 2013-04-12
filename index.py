@@ -9,13 +9,16 @@ import logging
 import string
 from sets import Set
 from datetime import datetime, timedelta
-from google.appengine.api import urlfetch
-from google.appengine.ext import webapp
-from google.appengine.ext.webapp.util import run_wsgi_app
-from google.appengine.ext.webapp import template
 
-import config       # r14 add @20101215 独立bot的配置文件
-import db_util      # r2 add  @20101026 将数据库相关操作独立出来
+import webapp2
+from google.appengine.api import urlfetch
+# 2013.04 move to jinja2.template
+import jinja2
+JINJA_ENVIRONMENT = jinja2.Environment(autoescape=True, extensions=['jinja2.ext.autoescape'],
+    loader=jinja2.FileSystemLoader(os.path.dirname(__file__)))
+
+import config             # r14 add @20101215 独立bot的配置文件
+from db_util import *     # r2 add  @20101026 将数据库相关操作独立出来
 
 sys.path.insert(0, 'tweepy.zip')
 import tweepy
@@ -39,7 +42,7 @@ def OAuth_UpdateTweet(msg):
 
 # 读取词典文件中的下一个单词
 def GetNextTweetword_from_Dict():
-  udb = db_util.DB_Utility()
+  udb = DB_Utility()
   
   index = udb.GetIncCounter(config.DICT_LINES)
   xlswb = xlrd.open_workbook(config.DICT_NAME)
@@ -52,7 +55,10 @@ def GetNextTweetword_from_Dict():
       str = sheet1.cell_value(index, 1)
       title_line = 1
     else:
-      str = '%s%s%s' % ( sheet1.cell_value(index, 0), config.TW_WORD_LINK, sheet1.cell_value(index, 1) )
+      if (sheet1.cell_value(index, 1) == ''):
+        str = '%s' % ( sheet1.cell_value(index, 0) )     # 第二列没有内容，不附加连词符
+      else:
+        str = '%s%s%s' % ( sheet1.cell_value(index, 0), config.TW_WORD_LINK, sheet1.cell_value(index, 1) )
     
     if (len(sheet1.row_values(index)) > 2):     # 如果有第三列，取出来附加上
       if (sheet1.cell_value(index, 2) != ''):
@@ -75,20 +81,20 @@ def GetNextTweetword_from_Dict():
 
 
 # 请求 /
-class MainPage(webapp.RequestHandler):
+class MainPage(webapp2.RequestHandler):
   def get(self):
-    msg = 'It work!'
-    path = os.path.join(os.path.dirname(__file__), 'template/msg.html')
-    self.response.out.write(template.render(path, { 'msg': msg }))
+    template_values = { 'msg': 'It work!' }
+    template = JINJA_ENVIRONMENT.get_template('template/msg.html')
+    self.response.out.write(template.render(template_values))
 
 # 请求 /t
-class ShowCurrentWord(webapp.RequestHandler):
+class ShowCurrentWord(webapp2.RequestHandler):
   def get(self):
     mydate = datetime.utcnow() + timedelta(hours=+8)
     ts_hour = mydate.time().hour
     ts_min = mydate.time().minute / 5
     
-    udb = db_util.DB_Utility()
+    udb = DB_Utility()
     
     if (ts_hour < 7):
       words = '%s' % config.GAE_PAGE_TIPS
@@ -96,11 +102,11 @@ class ShowCurrentWord(webapp.RequestHandler):
       words = '%s<BR>%s' % ( udb.GetTitleString(), udb.GetCurrentWord() )
       logging.debug('ShowCurrentWord(): "%s"' % words)
     
-    path = os.path.join(os.path.dirname(__file__), 'template/words.html')
-    self.response.out.write(template.render(path, { 'words': words }))
+    template = JINJA_ENVIRONMENT.get_template('template/words.html')
+    self.response.out.write(template.render({ 'words': words }))
 
 # [ADMIN] 请求提及页面，显示最近的15条@消息
-class GetMentions(webapp.RequestHandler):
+class GetMentions(webapp2.RequestHandler):
   def get(self):
     auth = tweepy.OAuthHandler(config.CONSUMER_KEY, config.CONSUMER_SECRET)
     auth.set_access_token(config.ACCESS_TOKEN, config.ACCESS_SECRET)
@@ -109,12 +115,12 @@ class GetMentions(webapp.RequestHandler):
     
     logging.info('Check Mentions')
     
-    path = os.path.join(os.path.dirname(__file__), 'template/mentions.html')
-    self.response.out.write(template.render(path, { 'mentions': mentions }))
+    template = JINJA_ENVIRONMENT.get_template('template/mentions.html')
+    self.response.out.write(template.render({ 'mentions': mentions }))
 
 
 # 自动回Fo所有新的Followers
-class FollowAllNewcomers(webapp.RequestHandler):
+class FollowAllNewcomers(webapp2.RequestHandler):
   def get(self):
     auth = tweepy.OAuthHandler(config.CONSUMER_KEY, config.CONSUMER_SECRET)
     auth.set_access_token(config.ACCESS_TOKEN, config.ACCESS_SECRET)
@@ -142,9 +148,51 @@ class FollowAllNewcomers(webapp.RequestHandler):
 
 
 #
+# r17 新增计划任务支持
+#
+def ProcessScheduleTask(now):
+  # 取当前1小时内的到期任务
+  tdb = Db_TaskHelper()
+  tasklist = tdb.get_tasks(now)
+  
+  # 附加上一小时没有完成的任务
+  last_hour = now + timedelta(hours=-1)
+  tasklist_last = tdb.get_tasks(last_hour)
+  tasklist += tasklist_last
+  
+  if (tasklist):
+    for task in tasklist:
+      task_time = datetime(task.year, task.month, task.day, task.hour, task.minute)
+      
+      if (task_time < now):                       # 说明是以前失败的任务
+        if ((now-task_time).seconds > 900):       # 超过15分钟的任务，终止尝试
+          logging.warning('Scheduled task timeout: [%s] %s' % (task_time.strftime("%Y-%m-%d %H:%M"), task.msg.encode('utf8')))
+          tdb.clean_task(task_time)
+        else:
+          logging.info('retry last task: [%s] %s' % (task_time.strftime("%Y-%m-%d %H:%M"), task.msg.encode('utf8')))
+          try:
+            OAuth_UpdateTweet(task.msg.encode('utf8'))
+            tdb.clean_task(task_time)
+            logging.debug('task execute complete')
+          except Exception, e:
+            logging.error('task execute failed')
+
+      else:                                       # 未来1小时内的任务
+        if ((task_time-now).seconds < 300):       # 只处理距当前不足5分钟的
+          logging.info('execute task: [%s] %s' % (task_time.strftime("%Y-%m-%d %H:%M"), task.msg.encode('utf8')))
+          try:
+            OAuth_UpdateTweet(task.msg.encode('utf8'))
+            tdb.clean_task(task_time)
+            logging.debug('task execute complete')
+          except Exception, e:
+            logging.error('task execute failed')
+        else:
+          logging.debug('future task: [%s:L=%s] %s' % (task_time.strftime("%Y-%m-%d %H:%M"), (task_time-now).seconds, task.msg.encode('utf8')))
+
+#
 # Cron Job
 #
-class CronJobCheck(webapp.RequestHandler):
+class CronJobCheck(webapp2.RequestHandler):
   def get(self):
     # r14 add @20101130 增加请求来源的判断，只接受由CronJob发起的请求
     Access_CronJob = False
@@ -163,9 +211,14 @@ class CronJobCheck(webapp.RequestHandler):
     mydate = datetime.utcnow() + timedelta(hours=+8)
     ts_hour = mydate.time().hour
     ts_min = mydate.time().minute / 5
-    
-    udb = db_util.DB_Utility()
-    
+
+    try:
+      ProcessScheduleTask(mydate)     # r17 检查数据库中的计划任务并推送
+    except Exception, e:
+      logging.error('Process ScheduleTask() error! %s' % e)
+
+    udb = DB_Utility()
+
     # 7:00 ~ 23:59 是工作时间，不满足工作时间的直接返回
     if (ts_hour < 7):
       return
@@ -204,7 +257,7 @@ class CronJobCheck(webapp.RequestHandler):
       
       #logging.debug('Auto tweet success complete.')
     except tweepy.TweepError, e:
-      if ('Status is a duplicate' in e):            # 说明Tweet已经发出去了，清除掉这个失败
+      if ('duplicate' in e):                      # [无效?] Tweet已经发出去了，清除掉这个失败
         udb.SetFatalMin(-1)
         msg = '[WARN] 尝试恢复 %d 时刻的Tweet，但该Tweet已存在: %s' % (ts_min*5, e)
         logging.warring(msg)
@@ -216,41 +269,56 @@ class CronJobCheck(webapp.RequestHandler):
       msg = '[未知错误] 错误发生在 %d 分, %s' % (ts_min*5, e)
       logging.error(msg)
     
-    path = os.path.join(os.path.dirname(__file__), 'template/msg.html')
-    self.response.out.write(template.render(path, { 'msg': msg }))
+    template = JINJA_ENVIRONMENT.get_template('template/msg.html')
+    self.response.out.write(template.render({ 'msg': msg }))
 
-# 发送独立的 msg 到Twitter
-class SendTweet2Twitter(webapp.RequestHandler):
+# 查看计划任务列表
+class Manage_ScheduleTask(webapp2.RequestHandler):
   def get(self):
-    msg = self.request.get('msg')
+    schedule_task = Db_TaskHelper().list_tasks()
+    
+    template_values = {
+      'schedule_task': schedule_task,
+      'taskadd_url': config.KEY_MANAGETASK,
+    }
+
+    template = JINJA_ENVIRONMENT.get_template('template/schedule_task.html')
+    self.response.out.write(template.render(template_values))
+
+  def post(self):
     try:
-      if msg != '':
-        resp = OAuth_UpdateTweet(msg)
-        
-        logging.info('Send Tweet: %s, rtn %s' % (msg, resp))
-        
-        out_text = 'Send Tweet: %s' % msg
-        path = os.path.join(os.path.dirname(__file__), 'template/msg.html')
-        self.response.out.write(template.render(path, { 'msg': out_text }))
-        
-      else:
-        self.response.out.write('Invalid Input.')
+      st_year = string.atoi(self.request.get('year'))
+      st_month = string.atoi(self.request.get('month'))
+      st_day = string.atoi(self.request.get('day'))
+      st_hour = string.atoi(self.request.get('hour'))
+      st_minute = string.atoi(self.request.get('minute'))
+      st_msg = self.request.get('msg')
       
-    except (TypeError, ValueError):
-      self.response.out.write('Invalid Input!')
+      if (st_msg == ""):
+        raise TypeError, "Can't accept null parameters!"
+      
+      # 新增任务
+      task_date = datetime(st_year, st_month, st_day, st_hour, st_minute)
+      Db_TaskHelper().add_task(task_date, st_msg.encode('utf-8'))
+      
+      self.redirect(config.KEY_MANAGETASK)
+    except Exception, e:
+      self.response.out.write("Input error: %s" % e)
 
 
 
-application = webapp.WSGIApplication([('/', MainPage),
-                                      (config.URL_CURWORD, ShowCurrentWord),
-                                      (config.URL_MENTIONS, GetMentions),
-                                      (config.KEY_FOBACK_ALL, FollowAllNewcomers),
-                                      (config.KEY_CRONJOB, CronJobCheck),
-                                      (config.URL_SENDTWEET, SendTweet2Twitter)
-                                     ], debug=True)
+app = webapp2.WSGIApplication([('/', MainPage),
+                                (config.URL_CURWORD, ShowCurrentWord),
+                                (config.URL_MENTIONS, GetMentions),
+                                (config.KEY_FOBACK_ALL, FollowAllNewcomers),
+                                (config.KEY_CRONJOB, CronJobCheck),
+                                (config.KEY_MANAGETASK, Manage_ScheduleTask)
+                               ], debug=True)
 
+"""
 def main():
   run_wsgi_app(application)
 
 if __name__ == "__main__":
   main()
+"""

@@ -18,4 +18,8 @@ OAuth认证(使用tweepy框架)
 2010-12-06 更新到 r14 版本。增加config.py，新增自动回Fo功能
 
 Demo: http://twitter.com/zwbot
-0
+
+
+** 部署到GAE **
+部署到GAE前，请参照 DeploymentGuide 修改config.py的配置，并且自定义你的bot
+http://code.google.com/p/zwbot/wiki/DeploymentGuide

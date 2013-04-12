@@ -4,6 +4,8 @@
 <title>@zwbot</title>
 </head>
 <body>
-{{ words }}
+{% autoescape off %}
+<p>{{ words }}</p>
+{% endautoescape %}
 </body>
 </html>

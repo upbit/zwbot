@@ -58,6 +58,9 @@ margin-left: 49px;
 padding-top: 2px;
 padding-left: 10px;
 padding-bottom: 2px;
+color: AAA;
+}
+.tweet-user-block-name a {
 color: #0084B4;
 }
 .tweet-user-block-desc {
@@ -68,7 +71,7 @@ min-height: 36px;
 padding-top: 2px;
 padding-left: 10px;
 padding-bottom: 4px;
-color: #AAA;
+color: #BBB;
 }
 
 .tweet-text {
@@ -100,7 +103,7 @@ color: #999;
           <img src="{{ status.user.profile_image_url }}" />
         </div>
         <div class="tweet-user-block-name">
-          <b>@{{ status.user.screen_name }}</b>
+          <a href="http://twitter.com/{{ status.user.screen_name }}/">{{ status.user.name }}</a> (@{{ status.user.screen_name }})
         </div>
         <div class="tweet-user-block-desc">
           {{ status.user.description }}

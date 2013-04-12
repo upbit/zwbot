@@ -4,6 +4,11 @@
 <title>zwbot project</title>
 </head>
 <body>
-  <h1>{{ msg }}</h1>
+  <div id="context">
+  {% autoescape off %}
+    <h1>{{ msg }}</h1>
+  {% endautoescape %}
+	<img src="https://developers.google.com/appengine/images/appengine-silver-120x30.gif" alt="Powered by Google App Engine" />
+  </div>
 </body>
 </html>
